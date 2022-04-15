@@ -1,0 +1,375 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "type": "string",
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "Location for the resources."
+            }
+        },
+        "name": {
+            "maxLength": 20,
+            "type": "String",
+            "metadata": {
+                "description": "The name for the Lustre filesystem."
+            }
+        },
+        "mdsSku": {
+            "defaultValue": "Standard_D8s_v3",
+            "type": "String",
+            "metadata": {
+                "description": "The SKU for the Lustre MDS."
+            }
+        },
+        "ossSku": {
+            "defaultValue": "Standard_L8s_v2",
+            "type": "String",
+            "metadata": {
+                "description": "The VM type for the Lustre nodes."
+            }
+        },
+        "instanceCount": {
+            "minValue": 1,
+            "maxValue": 300,
+            "type": "Int",
+            "metadata": {
+                "description": "Number of additional Lustre nodes."
+            }
+        },
+        "adminUser": {
+            "type": "String",
+            "metadata": {
+                "description": "The username for the Lustre filesystem."
+            }
+        },
+        "rsaPublicKey": {
+            "type": "String",
+            "metadata": {
+                "description": "The RSA public key to access the nodes."
+            }
+        },
+        "existingVnetResourceGroupName": {
+            "type": "String",
+            "metadata": {
+                "description": "Name of the resource group for the existing virtual network to deploy the scale set into."
+            }
+        },
+        "existingVnetName": {
+            "type": "String",
+            "metadata": {
+                "description": "Name of the existing virtual network to deploy the scale set into."
+            }
+        },
+        "existingSubnetName": {
+            "type": "String",
+            "metadata": {
+                "description": "Name of the existing subnet to deploy the scale set into."
+            }
+        },
+        "storageAccount": {
+            "defaultValue": "",
+            "type": "String",
+            "metadata": {
+                "description": "Optional. The storage account to use (leave blank to disable HSM)"
+            }
+        },
+        "storageContainer": {
+            "defaultValue": "",
+            "type": "String",
+            "metadata": {
+                "description": "The storage container to use for archive"
+            }
+        },
+        "storageSas": {
+            "defaultValue": "",
+            "type": "String",
+            "metadata": {
+                "description": "A SAS key for the storage account"
+            }
+        },
+        "logAnalyticsAccount": {
+            "defaultValue": "",
+            "type": "String",
+            "metadata": {
+                "description": "Optional. The log analytics account to use (leave blank to disable logging)"
+            }
+        },
+        "logAnalyticsWorkspaceId": {
+            "defaultValue": "",
+            "type": "String",
+            "metadata": {
+                "description": " The log analytics workspace id"
+            }
+        },
+        "logAnalyticsKey": {
+            "defaultValue": "",
+            "type": "String",
+            "metadata": {
+                "description": "The log analytics account key"
+            }
+        },
+        "mdtStorageSku": {
+            "defaultValue": "Premium_LRS",
+            "type": "String",
+            "metadata": {
+                "description": "The SKU for the MDT disks"
+            }
+        },
+        "mdtCacheOption": {
+            "defaultValue": "ReadWrite",
+            "type": "String",
+            "metadata": {
+                "description": "The caching option for the MDT disks"
+            }
+        },
+        "mdtDiskSize": {
+            "defaultValue": 1024,
+            "type": "Int",
+            "metadata": {
+                "description": "The size of the MDT disks"
+            }
+        },
+        "mdtNumDisks": {
+            "type": "Int",
+            "metadata": {
+                "description": "The number of disks in the MDT RAID"
+            }
+        },
+        "ostStorageSku": {
+            "defaultValue": "Premium_LRS",
+            "type": "String",
+            "metadata": {
+                "description": "The SKU for the OST disks"
+            }
+        },
+        "ostCacheOption": {
+            "defaultValue": "None",
+            "type": "String",
+            "metadata": {
+                "description": "The caching option for the OST disks"
+            }
+        },
+        "ostDiskSize": {
+            "defaultValue": 1024,
+            "type": "Int",
+            "metadata": {
+                "description": "The size of the OST disks"
+            }
+        },
+        "ostNumDisks": {
+            "type": "Int",
+            "metadata": {
+                "description": "The number of disks on each OSS"
+            }
+        },
+        "ossDiskSetup": {
+            "defaultValue": "raid",
+            "allowedValues": [
+                "raid",
+                "separate"
+            ],
+            "type": "String",
+            "metadata": {
+                "description": "Create a single RAID or use multiple OSTs"
+            }
+        }
+    },
+    "variables": {
+        "tagname": "[concat('LustreFS-', parameters('name'))]",
+        "subnet": "[resourceId(parameters('existingVnetResourceGroupName'), 'Microsoft.Network/virtualNetworks/subnets', parameters('existingVnetName'), parameters('existingSubNetName'))]",
+        "imageReference": {
+            "publisher": "azhpc",
+            "offer": "azurehpc-lustre",
+            "sku": "azurehpc-lustre-2_12",
+            "version": "latest"      
+        },
+        "imagePlan": {
+            "publisher": "azhpc",
+            "product": "azurehpc-lustre",
+            "name": "azurehpc-lustre-2_12"
+        },
+        "ciScript": "",
+        "copy": [
+            {
+                "name": "mdtDataDisks",
+                "count": "[parameters('mdtNumDisks')]",
+                "input": {
+                    "caching": "[parameters('mdtCacheOption')]",
+                    "managedDisk": {
+                        "storageAccountType": "[parameters('mdtStorageSku')]"
+                    },
+                    "createOption": "Empty",
+                    "lun": "[copyIndex('mdtDataDisks')]",
+                    "diskSizeGB": "[parameters('mdtDiskSize')]"
+                }
+            },
+            {
+                "name": "ostDataDisks",
+                "count": "[parameters('ostNumDisks')]",
+                "input": {
+                    "caching": "[parameters('ostCacheOption')]",
+                    "managedDisk": {
+                        "storageAccountType": "[parameters('ostStorageSku')]"
+                    },
+                    "createOption": "Empty",
+                    "lun": "[copyIndex('ostDataDisks')]",
+                    "diskSizeGB": "[parameters('ostDiskSize')]"
+                }
+            }
+        ]
+    },
+    "functions": [],
+    "resources": [
+        {
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "2021-03-01",
+            "name": "[concat(parameters('name'), '-NetworkInterface')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "filesystem": "[variables('tagname')]"
+            },
+            "properties": {
+                "enableAcceleratedNetworking": true,
+                "ipConfigurations": [
+                    {
+                        "name": "ipConfig",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "subnet": {
+                                "id": "[variables('subnet')]"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2021-07-01",
+            "name": "[parameters('name')]",
+            "location": "[parameters('location')]",
+            "plan": "[variables('imagePlan')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', concat(parameters('name'), '-NetworkInterface'))]"
+            ],
+            "tags": {
+                "filesystem": "[variables('tagname')]"
+            },
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "[parameters('mdsSku')]"
+                },
+                "osProfile": {
+                    "computerName": "[parameters('name')]",
+                    "adminUsername": "[parameters('adminUser')]",
+                    "customData": "[base64(variables('ciScript'))]",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": true,
+                        "ssh": {
+                            "publicKeys": [
+                                {
+                                    "path": "[format('/home/{0}/.ssh/authorized_keys', parameters('adminUser'))]",
+                                    "keyData": "[parameters('rsaPublicKey')]"
+                                }
+                            ]
+                        }
+                    }
+                },
+                "storageProfile": {
+                    "imageReference": "[variables('imageReference')]",
+                    "osDisk": {
+                        "createOption": "FromImage",
+                        "caching": "ReadWrite"
+                    },
+                    "dataDisks": "[variables('mdtDataDisks')]"
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(parameters('name'), '-NetworkInterface'))]"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "2021-03-01",
+            "name": "[concat(parameters('name'), '-oss-', copyIndex(), '-NetworkInterface')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "filesystem": "[variables('tagname')]"
+            },
+            "copy": {
+                "name": "ossnicscopy",
+                "count": "[parameters('instanceCount')]"
+            },
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "[concat('ipConfig-oss-', copyIndex())]",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "subnet": {
+                                "id": "[variables('subnet')]"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2021-07-01",
+            "name": "[concat(parameters('name'), '-oss-', copyIndex())]",
+            "location": "[parameters('location')]",
+            "plan": "[variables('imagePlan')]",
+            "copy": {
+                "name": "osscopy",
+                "count": "[parameters('instanceCount')]"
+            },
+            "tags": {
+                "filesystem": "[variables('tagname')]"
+            },
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "[parameters('ossSku')]"
+                },
+                "osProfile": {
+                    "computerName": "[concat(parameters('name'), '-oss-', copyIndex())]",
+                    "adminUsername": "[parameters('adminUser')]",
+                    "customData": "[base64(variables('ciScript'))]",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": true,
+                        "ssh": {
+                            "publicKeys": [
+                                {
+                                    "path": "[format('/home/{0}/.ssh/authorized_keys', parameters('adminUser'))]",
+                                    "keyData": "[parameters('rsaPublicKey')]"
+                                }
+                            ]
+                        }
+                    }
+                },
+                "storageProfile": {
+                    "imageReference": "[variables('imageReference')]",
+                    "osDisk": {
+                        "createOption": "FromImage",
+                        "caching": "ReadWrite"
+                    },
+                    "dataDisks": "[variables('ostDataDisks')]"
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(parameters('name'), '-oss-', copyIndex(), '-NetworkInterface'))]"
+                        }
+                    ]
+                }
+            }
+        }
+    ],
+    "outputs": {}
+}
