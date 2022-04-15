@@ -1,0 +1,1377 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "type": "string",
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "Location for the resources."
+            }
+        },
+        "name": {
+            "maxLength": 20,
+            "type": "String",
+            "metadata": {
+                "description": "The name for the Lustre filesystem."
+            }
+        },
+        "mdsSku": {
+            "defaultValue": "Standard_D8s_v3",
+            "type": "String",
+            "metadata": {
+                "description": "The SKU for the Lustre MDS."
+            }
+        },
+        "ossSku": {
+            "defaultValue": "Standard_L8s_v2",
+            "type": "String",
+            "metadata": {
+                "description": "The VM type for the Lustre nodes."
+            }
+        },
+        "instanceCount": {
+            "minValue": 1,
+            "maxValue": 300,
+            "type": "Int",
+            "metadata": {
+                "description": "Number of additional Lustre nodes."
+            }
+        },
+        "adminUser": {
+            "type": "String",
+            "metadata": {
+                "description": "The username for the Lustre filesystem."
+            }
+        },
+        "rsaPublicKey": {
+            "type": "String",
+            "metadata": {
+                "description": "The RSA public key to access the nodes."
+            }
+        },
+        "existingVnetResourceGroupName": {
+            "type": "String",
+            "metadata": {
+                "description": "Name of the resource group for the existing virtual network to deploy the scale set into."
+            }
+        },
+        "existingVnetName": {
+            "type": "String",
+            "metadata": {
+                "description": "Name of the existing virtual network to deploy the scale set into."
+            }
+        },
+        "existingSubnetName": {
+            "type": "String",
+            "metadata": {
+                "description": "Name of the existing subnet to deploy the scale set into."
+            }
+        },
+        "storageAccount": {
+            "defaultValue": "",
+            "type": "String",
+            "metadata": {
+                "description": "Optional. The storage account to use (leave blank to disable HSM)"
+            }
+        },
+        "storageContainer": {
+            "defaultValue": "",
+            "type": "String",
+            "metadata": {
+                "description": "The storage container to use for archive"
+            }
+        },
+        "storageSas": {
+            "defaultValue": "",
+            "type": "String",
+            "metadata": {
+                "description": "A SAS key for the storage account"
+            }
+        },
+        "mdtStorageSku": {
+            "defaultValue": "Premium_LRS",
+            "type": "String",
+            "metadata": {
+                "description": "The SKU for the MDT disks"
+            }
+        },
+        "mdtCacheOption": {
+            "defaultValue": "ReadWrite",
+            "type": "String",
+            "metadata": {
+                "description": "The caching option for the MDT disks"
+            }
+        },
+        "mdtDiskSize": {
+            "defaultValue": 1024,
+            "type": "Int",
+            "metadata": {
+                "description": "The size of the MDT disks"
+            }
+        },
+        "mdtNumDisks": {
+            "type": "Int",
+            "metadata": {
+                "description": "The number of disks in the MDT RAID"
+            }
+        },
+        "ostStorageSku": {
+            "defaultValue": "Premium_LRS",
+            "type": "String",
+            "metadata": {
+                "description": "The SKU for the OST disks"
+            }
+        },
+        "ostCacheOption": {
+            "defaultValue": "None",
+            "type": "String",
+            "metadata": {
+                "description": "The caching option for the OST disks"
+            }
+        },
+        "ostDiskSize": {
+            "defaultValue": 1024,
+            "type": "Int",
+            "metadata": {
+                "description": "The size of the OST disks"
+            }
+        },
+        "ostNumDisks": {
+            "type": "Int",
+            "metadata": {
+                "description": "The number of disks on each OSS"
+            }
+        },
+        "ossDiskSetup": {
+            "defaultValue": "raid",
+            "allowedValues": [
+                "raid",
+                "separate"
+            ],
+            "type": "String",
+            "metadata": {
+                "description": "Create a single RAID or use multiple OSTs"
+            }
+        },
+        "deployPolicyEngine": {
+            "defaultValue": false,
+            "type": "Bool",
+            "metadata": {
+                "description": "Deploy the Robinhood policy engine"
+            }
+        },
+        "rbhSku": {
+            "defaultValue": "Standard_D4s_v4",
+            "type": "String",
+            "metadata": {
+                "description": "The VM type for running Robinhood."
+            }
+        },
+        "useAvailabilityZone": {
+            "defaultValue": false,
+            "type": "Bool",
+            "metadata": {
+                "description": "Use an availability zone for the Lustre nodes"
+            }
+        },
+        "availabilityZone": {
+            "defaultValue": 1,
+            "type": "Int",
+            "minValue": 1,
+            "maxValue": 3,
+            "metadata": {
+                "description": "The availability zone to use for the Lustre nodes"
+            }
+        }
+    },
+    "variables": {
+        "tagname": "[concat('LustreFS-', parameters('name'))]",
+        "subnet": "[resourceId(parameters('existingVnetResourceGroupName'), 'Microsoft.Network/virtualNetworks/subnets', parameters('existingVnetName'), parameters('existingSubNetName'))]",
+        "imageReference": {
+            "publisher": "azhpc",
+            "offer": "azurehpc-lustre",
+            "sku": "azurehpc-lustre-2_12",
+            "version": "latest"      
+        },
+        "imagePlan": {
+            "publisher": "azhpc",
+            "product": "azurehpc-lustre",
+            "name": "azurehpc-lustre-2_12"
+        },
+        "ciScript": "",
+        "copy": [
+            {
+                "name": "mdtDataDisks",
+                "count": "[parameters('mdtNumDisks')]",
+                "input": {
+                    "caching": "[parameters('mdtCacheOption')]",
+                    "managedDisk": {
+                        "storageAccountType": "[parameters('mdtStorageSku')]"
+                    },
+                    "createOption": "Empty",
+                    "lun": "[copyIndex('mdtDataDisks')]",
+                    "diskSizeGB": "[parameters('mdtDiskSize')]"
+                }
+            },
+            {
+                "name": "ostDataDisks",
+                "count": "[parameters('ostNumDisks')]",
+                "input": {
+                    "caching": "[parameters('ostCacheOption')]",
+                    "managedDisk": {
+                        "storageAccountType": "[parameters('ostStorageSku')]"
+                    },
+                    "createOption": "Empty",
+                    "lun": "[copyIndex('ostDataDisks')]",
+                    "diskSizeGB": "[parameters('ostDiskSize')]"
+                }
+            }
+        ]
+    },
+    "functions": [],
+    "resources": [
+         {
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "2021-03-01",
+            "name": "[concat(parameters('name'), '-NetworkInterface')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "filesystem": "[variables('tagname')]"
+            },
+            "properties": {
+                "enableAcceleratedNetworking": true,
+                "ipConfigurations": [
+                    {
+                        "name": "ipConfig",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "subnet": {
+                                "id": "[variables('subnet')]"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2021-07-01",
+            "name": "[parameters('name')]",
+            "location": "[parameters('location')]",
+            "plan": "[variables('imagePlan')]",
+            "zones": "[if(parameters('useAvailabilityZone'), array(format('{0}', parameters('availabilityZone'))), null())]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', concat(parameters('name'), '-NetworkInterface'))]"
+            ],
+            "tags": {
+                "filesystem": "[variables('tagname')]"
+            },
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "[parameters('mdsSku')]"
+                },
+                "osProfile": {
+                    "computerName": "[parameters('name')]",
+                    "adminUsername": "[parameters('adminUser')]",
+                    "customData": "[base64(variables('ciScript'))]",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": true,
+                        "ssh": {
+                            "publicKeys": [
+                                {
+                                    "path": "[format('/home/{0}/.ssh/authorized_keys', parameters('adminUser'))]",
+                                    "keyData": "[parameters('rsaPublicKey')]"
+                                }
+                            ]
+                        }
+                    }
+                },
+                "storageProfile": {
+                    "imageReference": "[variables('imageReference')]",
+                    "osDisk": {
+                        "createOption": "FromImage",
+                        "caching": "ReadWrite"
+                    },
+                    "dataDisks": "[variables('mdtDataDisks')]"
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(parameters('name'), '-NetworkInterface'))]"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "condition": "[parameters('deployPolicyEngine')]",
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "2021-03-01",
+            "name": "[concat(parameters('name'), '-rbh-NetworkInterface')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "filesystem": "[variables('tagname')]"
+            },
+            "properties": {
+                "enableAcceleratedNetworking": true,
+                "ipConfigurations": [
+                    {
+                        "name": "rbhIpConfig",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "subnet": {
+                                "id": "[variables('subnet')]"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "condition": "[parameters('deployPolicyEngine')]",
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2021-07-01",
+            "name": "[concat(parameters('name'), '-rbh')]",
+            "location": "[parameters('location')]",
+            "plan": "[variables('imagePlan')]",
+            "zones": "[if(parameters('useAvailabilityZone'), array(format('{0}', parameters('availabilityZone'))), null())]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/networkInterfaces', concat(parameters('name'), '-rbh-NetworkInterface'))]"
+            ],
+            "tags": {
+                "filesystem": "[variables('tagname')]"
+            },
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "[parameters('rbhSku')]"
+                },
+                "osProfile": {
+                    "computerName": "[concat(parameters('name'), 'rbh')]",
+                    "adminUsername": "[parameters('adminUser')]",
+                    "customData": "[base64(variables('ciScript'))]",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": true,
+                        "ssh": {
+                            "publicKeys": [
+                                {
+                                    "path": "[format('/home/{0}/.ssh/authorized_keys', parameters('adminUser'))]",
+                                    "keyData": "[parameters('rsaPublicKey')]"
+                                }
+                            ]
+                        }
+                    }
+                },
+                "storageProfile": {
+                    "imageReference": "[variables('imageReference')]",
+                    "osDisk": {
+                        "createOption": "FromImage",
+                        "caching": "ReadWrite"
+                    }
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(parameters('name'), '-rbh-NetworkInterface'))]"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Compute/virtualMachineScaleSets",
+            "apiVersion": "2021-07-01",
+            "name": "[concat(parameters('name'), '-vmss')]",
+            "location": "[parameters('location')]",
+            "plan": "[variables('imagePlan')]",
+            "zones": "[if(parameters('useAvailabilityZone'), array(format('{0}', parameters('availabilityZone'))), null())]",
+            "tags": {
+                "filesystem": "[variables('tagname')]"
+            },
+            "sku": {
+                "name": "[parameters('ossSku')]",
+                "tier": "Standard",
+                "capacity": "[parameters('instanceCount')]"
+            },
+            "properties": {
+                "overprovision": false,
+                "upgradePolicy": {
+                    "mode": "Manual"
+                },
+                "virtualMachineProfile": {
+                    "storageProfile": {
+                        "imageReference": "[variables('imageReference')]",
+                        "osDisk": {
+                            "createOption": "FromImage",
+                            "caching": "ReadWrite"
+                        },
+                        "dataDisks": "[variables('ostDataDisks')]"
+                    },
+                    "osProfile": {
+                        "computerNamePrefix": "[parameters('name')]",
+                        "adminUsername": "[parameters('adminUser')]",
+                        "customData": "[base64(variables('ciScript'))]",
+                        "linuxConfiguration": {
+                            "disablePasswordAuthentication": true,
+                            "ssh": {
+                                "publicKeys": [
+                                    {
+                                        "path": "[format('/home/{0}/.ssh/authorized_keys', parameters('adminUser'))]",
+                                        "keyData": "[parameters('rsaPublicKey')]"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "networkProfile": {
+                        "networkInterfaceConfigurations": [
+                            {
+                                "name": "[concat(parameters('name'), '-nic')]",
+                                "properties": {
+                                    "primary": true,
+                                    "enableAcceleratedNetworking": true,
+                                    "ipConfigurations": [
+                                        {
+                                            "name": "ipConfig-vmss",
+                                            "properties": {
+                                                "subnet": {
+                                                    "id": "[variables('subnet')]"
+                                                }
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Portal/dashboards",
+            "apiVersion": "2020-09-01-preview",
+            "name": "[parameters('name')]",
+            "location": "[parameters('location')]",
+            "properties": {
+                "lenses": [
+                  {
+                    "order": 0,
+                    "parts": [
+                      {
+                        "position": {
+                          "x": 0,
+                          "y": 0,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachines', parameters('name'))]"
+                                      },
+                                      "name": "Percentage CPU",
+                                      "aggregationType": 4,
+                                      "namespace": "microsoft.compute/virtualmachines",
+                                      "metricVisualization": {
+                                        "displayName": "Percentage CPU",
+                                        "resourceDisplayName": "[parameters('name')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "MDS Percentage CPU",
+                                  "titleKind": 2,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "position": {
+                          "x": 8,
+                          "y": 0,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachines', parameters('name'))]"
+                                      },
+                                      "name": "Network In Total",
+                                      "aggregationType": 1,
+                                      "namespace": "microsoft.compute/virtualmachines",
+                                      "metricVisualization": {
+                                        "displayName": "Network In Total",
+                                        "resourceDisplayName": "[parameters('name')]"
+                                      }
+                                    },
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachines', parameters('name'))]"
+                                      },
+                                      "name": "Network Out Total",
+                                      "aggregationType": 1,
+                                      "namespace": "microsoft.compute/virtualmachines",
+                                      "metricVisualization": {
+                                        "displayName": "Network Out Total",
+                                        "resourceDisplayName": "[parameters('name')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "MDS Network Usage",
+                                  "titleKind": 2,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "position": {
+                          "x": 16,
+                          "y": 0,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachines', parameters('name'))]"
+                                      },
+                                      "name": "VM Uncached Bandwidth Consumed Percentage",
+                                      "aggregationType": 4,
+                                      "namespace": "microsoft.compute/virtualmachines",
+                                      "metricVisualization": {
+                                        "displayName": "VM Uncached Bandwidth Consumed Percentage",
+                                        "resourceDisplayName": "[parameters('name')]"
+                                      }
+                                    },
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachines', parameters('name'))]"
+                                      },
+                                      "name": "VM Uncached IOPS Consumed Percentage",
+                                      "aggregationType": 4,
+                                      "namespace": "microsoft.compute/virtualmachines",
+                                      "metricVisualization": {
+                                        "displayName": "VM Uncached IOPS Consumed Percentage",
+                                        "resourceDisplayName": "[parameters('name')]"
+                                      }
+                                    },
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachines', parameters('name'))]"
+                                      },
+                                      "name": "VM Cached Bandwidth Consumed Percentage",
+                                      "aggregationType": 4,
+                                      "namespace": "microsoft.compute/virtualmachines",
+                                      "metricVisualization": {
+                                        "displayName": "VM Cached Bandwidth Consumed Percentage",
+                                        "resourceDisplayName": "[parameters('name')]"
+                                      }
+                                    },
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachines', parameters('name'))]"
+                                      },
+                                      "name": "VM Cached IOPS Consumed Percentage",
+                                      "aggregationType": 4,
+                                      "namespace": "microsoft.compute/virtualmachines",
+                                      "metricVisualization": {
+                                        "displayName": "VM Cached IOPS Consumed Percentage",
+                                        "resourceDisplayName": "[parameters('name')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "MDS Data Disk Bandwidth/IOPS Consumed Percentages",
+                                  "titleKind": 2,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "position": {
+                          "x": 0,
+                          "y": 4,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', concat(parameters('name'), '-vmss'))]"
+                                      },
+                                      "name": "Percentage CPU",
+                                      "aggregationType": 4,
+                                      "namespace": "microsoft.compute/virtualmachinescalesets",
+                                      "metricVisualization": {
+                                        "displayName": "Percentage CPU",
+                                        "resourceDisplayName": "[concat(parameters('name'), '-vmss')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "OSS Percentage CPU",
+                                  "titleKind": 2,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  },
+                                  "grouping": {
+                                    "dimension": "VMName",
+                                    "sort": 2,
+                                    "top": 32
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "position": {
+                          "x": 8,
+                          "y": 4,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', concat(parameters('name'), '-vmss'))]"
+                                      },
+                                      "name": "Network In Total",
+                                      "aggregationType": 1,
+                                      "namespace": "microsoft.compute/virtualmachinescalesets",
+                                      "metricVisualization": {
+                                        "displayName": "Network In Total",
+                                        "resourceDisplayName": "[concat(parameters('name'), '-vmss')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "OSS Network in",
+                                  "titleKind": 2,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  },
+                                  "grouping": {
+                                    "dimension": "VMName",
+                                    "sort": 2,
+                                    "top": 32
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "position": {
+                          "x": 16,
+                          "y": 4,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', concat(parameters('name'), '-vmss'))]"
+                                      },
+                                      "name": "Network Out Total",
+                                      "aggregationType": 1,
+                                      "namespace": "microsoft.compute/virtualmachinescalesets",
+                                      "metricVisualization": {
+                                        "displayName": "Network Out Total",
+                                        "resourceDisplayName": "[concat(parameters('name'), '-vmss')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "OSS Network Out",
+                                  "titleKind": 2,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  },
+                                  "grouping": {
+                                    "dimension": "VMName",
+                                    "sort": 2,
+                                    "top": 32
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "position": {
+                          "x": 0,
+                          "y": 8,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', concat(parameters('name'), '-vmss'))]"
+                                      },
+                                      "name": "Disk Read Bytes",
+                                      "aggregationType": 1,
+                                      "namespace": "microsoft.compute/virtualmachinescalesets",
+                                      "metricVisualization": {
+                                        "displayName": "Disk Read Bytes",
+                                        "resourceDisplayName": "[concat(parameters('name'), '-vmss')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "OSS Disk Read Bytes",
+                                  "titleKind": 2,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  },
+                                  "grouping": {
+                                    "dimension": "VMName",
+                                    "sort": 2,
+                                    "top": 32
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "position": {
+                          "x": 8,
+                          "y": 8,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', concat(parameters('name'), '-vmss'))]"
+                                      },
+                                      "name": "VM Uncached Bandwidth Consumed Percentage",
+                                      "aggregationType": 4,
+                                      "namespace": "microsoft.compute/virtualmachinescalesets",
+                                      "metricVisualization": {
+                                        "displayName": "VM Uncached Bandwidth Consumed Percentage",
+                                        "resourceDisplayName": "[concat(parameters('name'), '-vmss')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "OSS Data Disk Uncached Bandwidth Consumed Percentage",
+                                  "titleKind": 2,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  },
+                                  "grouping": {
+                                    "dimension": "VMName",
+                                    "sort": 2,
+                                    "top": 32
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "position": {
+                          "x": 16,
+                          "y": 8,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', concat(parameters('name'), '-vmss'))]"
+                                      },
+                                      "name": "VM Cached Bandwidth Consumed Percentage",
+                                      "aggregationType": 4,
+                                      "namespace": "microsoft.compute/virtualmachinescalesets",
+                                      "metricVisualization": {
+                                        "displayName": "VM Cached Bandwidth Consumed Percentage",
+                                        "resourceDisplayName": "[concat(parameters('name'), '-vmss')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "OSS Cached Bandwidth Consumed Percentage",
+                                  "titleKind": 2,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  },
+                                  "grouping": {
+                                    "dimension": "VMName",
+                                    "sort": 2,
+                                    "top": 32
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "position": {
+                          "x": 0,
+                          "y": 12,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', concat(parameters('name'), '-vmss'))]"
+                                      },
+                                      "name": "Disk Write Bytes",
+                                      "aggregationType": 1,
+                                      "namespace": "microsoft.compute/virtualmachinescalesets",
+                                      "metricVisualization": {
+                                        "displayName": "Disk Write Bytes",
+                                        "resourceDisplayName": "[concat(parameters('name'), '-vmss')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "OSS Disk Write Bytes",
+                                  "titleKind": 1,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  },
+                                  "grouping": {
+                                    "dimension": "VMName",
+                                    "sort": 2,
+                                    "top": 32
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "position": {
+                          "x": 8,
+                          "y": 12,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', concat(parameters('name'), '-vmss'))]"
+                                      },
+                                      "name": "VM Uncached IOPS Consumed Percentage",
+                                      "aggregationType": 4,
+                                      "namespace": "microsoft.compute/virtualmachinescalesets",
+                                      "metricVisualization": {
+                                        "displayName": "VM Uncached IOPS Consumed Percentage",
+                                        "resourceDisplayName": "[concat(parameters('name'), '-vmss')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "OSS Data Disk Uncached IOPS Consumed Percentage",
+                                  "titleKind": 2,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  },
+                                  "grouping": {
+                                    "dimension": "VMName",
+                                    "sort": 2,
+                                    "top": 32
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "position": {
+                          "x": 16,
+                          "y": 12,
+                          "colSpan": 8,
+                          "rowSpan": 4
+                        },
+                        "metadata": {
+                          "inputs": [
+                            {
+                              "name": "options",
+                              "isOptional": true
+                            },
+                            {
+                              "name": "sharedTimeRange",
+                              "isOptional": true
+                            }
+                          ],
+                          "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                          "settings": {
+                            "content": {
+                              "options": {
+                                "chart": {
+                                  "metrics": [
+                                    {
+                                      "resourceMetadata": {
+                                        "id": "[resourceId('Microsoft.Compute/virtualMachineScaleSets', concat(parameters('name'), '-vmss'))]"
+                                      },
+                                      "name": "VM Cached IOPS Consumed Percentage",
+                                      "aggregationType": 4,
+                                      "namespace": "microsoft.compute/virtualmachinescalesets",
+                                      "metricVisualization": {
+                                        "displayName": "VM Cached IOPS Consumed Percentage",
+                                        "resourceDisplayName": "[concat(parameters('name'), '-vmss')]"
+                                      }
+                                    }
+                                  ],
+                                  "title": "OSS Cached IOPS Consumed Percentage",
+                                  "titleKind": 2,
+                                  "visualization": {
+                                    "chartType": 2,
+                                    "legendVisualization": {
+                                      "isVisible": true,
+                                      "position": 2,
+                                      "hideSubtitle": false
+                                    },
+                                    "axisVisualization": {
+                                      "x": {
+                                        "isVisible": true,
+                                        "axisType": 2
+                                      },
+                                      "y": {
+                                        "isVisible": true,
+                                        "axisType": 1
+                                      }
+                                    },
+                                    "disablePinning": true
+                                  },
+                                  "grouping": {
+                                    "dimension": "VMName",
+                                    "sort": 2,
+                                    "top": 32
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "metadata": {
+                  "model": {
+                    "timeRange": {
+                      "value": {
+                        "relative": {
+                          "duration": 24,
+                          "timeUnit": 1
+                        }
+                      },
+                      "type": "MsPortalFx.Composition.Configuration.ValueTypes.TimeRange"
+                    },
+                    "filterLocale": {
+                      "value": "en-us"
+                    },
+                    "filters": {
+                      "value": {
+                        "MsPortalFx_TimeRange": {
+                          "model": {
+                            "format": "utc",
+                            "granularity": "auto",
+                            "relative": "60m"
+                          },
+                          "displayCache": {
+                            "name": "UTC Time",
+                            "value": "Past hour"
+                          },
+                          "filteredPartIds": [
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e40ef",
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e409e",
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e4385",
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e460e",
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e44c4",
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e4632",
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e463e",
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e4101",
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e4379",
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e4664",
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e410d",
+                            "StartboardPart-MonitorChartPart-9b470636-c72a-4827-ae79-0c72c28e439b"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+            "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', parameters('name'))]",
+                "[resourceId('Microsoft.Compute/virtualMachineScaleSets', format('{0}-vmss', parameters('name')))]"
+            ]
+        }
+    ],
+    "outputs": {}
+}
